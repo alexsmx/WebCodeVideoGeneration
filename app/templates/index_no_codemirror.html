@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Typer Recorder</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        textarea { width: 100%; height: 200px; }
+        #typing-area { border: 1px solid #ccc; padding: 10px; margin-top: 20px; position: relative; white-space: pre; font-family: monospace; }
+        button { margin-top: 10px; }
+        .editor-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: transparent;
+            z-index: 10;
+        }
+        video {
+            width: auto;
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <h1>Code Typer Recorder</h1>
+    <textarea id="code-input" placeholder="Paste your code here..."></textarea>
+    <label for="typing-speed">Typing Speed:</label>
+    <input type="range" id="typing-speed" min="1" max="10" value="5">
+    <span id="speed-display"></span>
+    <button onclick="startTyping()">Start Typing Simulation</button>
+    <div id="element-to-record" style="border: 5px solid gray; border-radius: 5px; padding: 20px; margin: 20px;width: 480px; height: 360px;">
+        <div id="typing-area"></div>
+    </div>
+    <div style="display: none;">
+        <video controls autoplay playsinline id="preview-video"></video>
+    </div>
+    <canvas id="background-canvas" style="position:absolute; top:-99999999px; left:-9999999999px;"></canvas>
+    <script src="/static/js/RecordRTC.js"></script>
+    <script src="https://www.webrtc-experiment.com/html2canvas.min.js"></script>
+    <script>
+        let mediaRecorder;
+        let recordedChunks = [];
+        let isSimulationRunning = false;
+        let baseTypingSpeed = 100;
+
+        
+        var elementToRecord = document.getElementById('element-to-record');
+        var canvas2d = document.getElementById('background-canvas');
+        var context = canvas2d.getContext('2d');
+
+        canvas2d.width = elementToRecord.clientWidth;
+        canvas2d.height = elementToRecord.clientHeight;
+                          
+        
+        var isRecordingStarted = false;
+        var isStoppedRecording = false;
+        function getRandomColor() {
+            var letters = '0123456789ABCDEF';
+            var color = '#';
+            for (var i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+        (function looper() {
+            if(!isRecordingStarted) {
+                return setTimeout(looper, 500);
+            }
+
+            html2canvas(elementToRecord).then(function(canvas) {
+                context.clearRect(0, 0, canvas2d.width, canvas2d.height);
+                context.drawImage(canvas, 0, 0, canvas2d.width, canvas2d.height);
+
+                if(isStoppedRecording) {
+                    return;
+                }
+
+                requestAnimationFrame(looper);
+            });
+        })();
+
+        // var recorder = new RecordRTC(canvas2d, {
+        //     type: 'canvas', 
+        //     autoWriteToDisk: true,
+        // });
+        var canvasStream = canvas2d.captureStream();
+
+        var audioPlusCanvasStream = new MediaStream();
+
+        canvasStream.getVideoTracks().forEach(function(track) {
+            audioPlusCanvasStream.addTrack(track);
+        });
+
+        navigator.mediaDevices.getUserMedia({
+            audio: {
+                noiseSuppression: false,
+                echoCancellation: false,
+            }}).then(function(mic) {
+            audioPlusCanvasStream.addTrack(mic.getTracks()[0]);
+        });
+
+        var recorder = new RecordRTC(audioPlusCanvasStream, {
+            type: 'video' // record audio+canvas stream
+        });
+
+        function getIndentation(line) {
+            const match = line.match(/^(\s*)/);
+            return match ? match[1] : '';
+        }
+        function updateTypingSpeed() {
+            const speed = document.getElementById("typing-speed").value;
+            const charactersPerMinute = Math.round(60 * 1000 / (1200 - speed * 100));
+            document.getElementById("speed-display").textContent = `${charactersPerMinute} characters/minute`;
+        }
+
+        document.getElementById("typing-speed").addEventListener("input", updateTypingSpeed);
+        updateTypingSpeed();
+        let spokenComments = [];
+
+        function extractSpokenComments(code) {
+            const regex = /(?:\/\/!|#!|--!|%!|'!|\/\*!|\{-!|"""!|'''!)\s*(?:\[([a-z]{2})\])?\s*(.*?)(?:\n|\*\/|\-\}|"""|'''|$)/gs;
+            let match;
+            const comments = [];
+            while ((match = regex.exec(code)) !== null) {
+                comments.push({
+                    lang: match[1] || 'en',
+                    text: match[2].trim()
+                });
+            }
+            return comments;
+        }
+
+        async function playAudio(text, lang = 'en') {
+            try {
+                const response = await fetch('/generate_audio', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text, lang }),
+                });
+                const data = await response.json();
+                if (data.audio_path) {
+                    const audio = new Audio(data.audio_path);
+                    await audio.play();
+                }
+            } catch (error) {
+                console.error('Error playing audio:', error);
+            }
+        }
+
+        function getRandomDelay(min, max) {
+            return Math.floor(Math.random() * (max - min + 1) + min);
+        }
+
+        function simulateThinkingPause() {
+            return new Promise(resolve => setTimeout(resolve, getRandomDelay(500, 1000)));
+        }
+
+        function disableEditorInteraction() {
+            const overlay = document.createElement('div');
+            overlay.className = 'editor-overlay';
+            document.getElementById('typing-area').appendChild(overlay);
+        }
+
+        function enableEditorInteraction() {
+            const overlay = document.querySelector('.editor-overlay');
+            if (overlay) {
+                overlay.remove();
+            }
+        }
+
+        function detectLanguage(code) {
+            if (/\b(fn|let|mut|impl|struct|enum)\b/.test(code)) return "rust";
+            if (/\b(func|package|import|chan|defer|go|map|interface)\b/.test(code)) return "go";
+            if (/\b(public|private|class|interface|extends|implements)\b/.test(code)) return "clike";
+            if (/\b(def|module|require|end|rescue|attr_accessor)\b/.test(code)) return "ruby";
+            if (/\b(<html|<body|<head|<script|<style)\b/.test(code)) return "htmlmixed";
+            if (/\b(<\?xml|<([a-z]+:)?[a-z]+(\s|>))\b/.test(code)) return "xml";
+            if (/\b(@media|@keyframes|@font-face)\b/.test(code)) return "css";
+            if (/\b(interface|namespace|declare|type|enum)\b/.test(code)) return "typescript";
+            return "javascript";
+        }
+
+        let editorContent = '';
+
+        function isCommentStart(code, index) {
+            return code.slice(index).match(/^(\/\/!|#!|--!|%!|'!|\/\*!|\{-!|"""!|'''!)\s*(?:\[[a-z]{2}\])?\s*/) !== null;
+        }
+
+        async function startTyping() {
+            if (isSimulationRunning) return;
+            isSimulationRunning = true;
+            document.querySelector('button[onclick="startTyping()"]').disabled = true;
+
+            try {
+                await startRecording();
+            } catch (error) {
+                console.error('Failed to start recording:', error);
+                isSimulationRunning = false;
+                document.querySelector('button[onclick="startTyping()"]').disabled = false;
+                return;
+            }
+            const code = document.getElementById("code-input").value;
+            const detectedLanguage = detectLanguage(code);
+            disableEditorInteraction();
+            let index = 0;
+            editorContent = '';
+
+            baseTypingSpeed = 1200 - document.getElementById("typing-speed").value * 100;
+            updateTypingSpeed();
+            spokenComments = extractSpokenComments(code);
+
+            async function typeChar() {
+                if (index < code.length) {
+                    if (isCommentStart(code, index)) {
+                        const match = code.slice(index).match(/^(\/\/!|#!|--!|%!|'!|\/\*!|\{-!|"""!|'''!)\s*(?:\[([a-z]{2})\])?\s*(.*?)(?:\n|\*\/|\-\}|"""|'''|$)/s);
+                        if (match) {
+                            const [fullMatch, commentStart, lang, comment] = match;
+                            await playAudio(comment.trim(), lang || 'en');
+                            index += fullMatch.length-1;
+                        } else {
+                            index++;
+                        }
+                    } else {
+                        if (Math.random() < 0.01) {
+                            setTimeout(typeChar, getRandomDelay(500, 700));
+                            return;
+                        }
+                        editorContent += code[index];
+                        document.getElementById('typing-area').textContent = editorContent;
+                        index++;
+                    }
+                    requestAnimationFrame(() => setTimeout(typeChar, getRandomDelay(baseTypingSpeed * 0.8, baseTypingSpeed * 1.2)));
+                } else {
+                    isSimulationRunning = false;
+                    document.querySelector('button[onclick="startTyping()"]').disabled = false;
+                    enableEditorInteraction();
+                    stopRecording();
+                }
+            }
+
+            typeChar();
+        }
+
+        async function startRecording() {
+            isStoppedRecording = false;
+            isRecordingStarted = true;
+
+            recorder.startRecording();
+        }
+
+        function stopRecording() {
+            recorder.stopRecording(function() {
+                isRecordingStarted = false;
+                isStoppedRecording = true;
+
+                var blob = recorder.getBlob();
+                document.getElementById('preview-video').src = URL.createObjectURL(blob);
+                document.getElementById('preview-video').parentNode.style.display = 'block';
+                elementToRecord.style.display = 'none';
+            });
+        }
+    </script>
+    <audio id="audio-player" style="display: none;"></audio>
+    <script src="https://www.webrtc-experiment.com/common.js"></script>
+</body>
+</html>
