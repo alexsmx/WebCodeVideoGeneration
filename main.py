@@ -17,6 +17,11 @@ templates = Jinja2Templates(directory="app/templates")
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.get("/no_codemirror")
+async def root(request: Request):
+    return templates.TemplateResponse("index_no_codemirror.html", {"request": request})
+
+
 @app.post("/generate_audio")
 async def generate_audio(request: Request):
     data = await request.json()

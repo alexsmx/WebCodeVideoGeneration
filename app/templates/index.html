@@ -7,7 +7,6 @@
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.2/lib/codemirror.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.2/lib/codemirror.min.css">
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.2/mode/javascript/javascript.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.2/mode/rust/rust.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.2/mode/go/go.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.2/mode/clike/clike.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.2/mode/ruby/ruby.js"></script>
@@ -17,7 +16,7 @@
     <style>
         body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
         textarea { width: 100%; height: 200px; }
-        #typing-area { border: 1px solid #ccc; padding: 10px; margin-top: 20px; position: relative; }
+        #typing-area { border: 1px solid #ccc; padding: 10px; margin-top: 20px; position: relative; font-family: monospace;font-variant: normal !important;}
         button { margin-top: 10px; }
         .editor-overlay {
             position: absolute;
@@ -28,6 +27,10 @@
             background-color: transparent;
             z-index: 10;
         }
+        video {
+            width: auto;
+            max-width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -37,8 +40,9 @@
     <input type="range" id="typing-speed" min="1" max="10" value="5">
     <span id="speed-display"></span>
     <button onclick="startTyping()">Start Typing Simulation</button>
-    
-    <div id="typing-area"></div>
+    <div id="element-to-record" style="border: 5px solid gray; border-radius: 5px; padding: 20px; margin: 20px;width: 480px; height: 360px;">
+        <div id="typing-area"></div>
+    </div>
     <div style="display: none;">
         <video controls autoplay playsinline id="preview-video"></video>
     </div>
@@ -53,7 +57,7 @@
         let baseTypingSpeed = 100;
 
         
-        var elementToRecord = document.getElementById('typing-area');
+        var elementToRecord = document.getElementById('element-to-record');
         var canvas2d = document.getElementById('background-canvas');
         var context = canvas2d.getContext('2d');
 
@@ -62,20 +66,13 @@
 
         var isRecordingStarted = false;
         var isStoppedRecording = false;
-        function getRandomColor() {
-            var letters = '0123456789ABCDEF';
-            var color = '#';
-            for (var i = 0; i < 6; i++) {
-                color += letters[Math.floor(Math.random() * 16)];
-            }
-            return color;
-        }
+        
         (function looper() {
             if(!isRecordingStarted) {
                 return setTimeout(looper, 500);
             }
 
-            html2canvas(elementToRecord).then(function(canvas) {
+            html2canvas(elementToRecord, {letterRendering: true}).then(function(canvas) {
                 context.clearRect(0, 0, canvas2d.width, canvas2d.height);
                 context.drawImage(canvas, 0, 0, canvas2d.width, canvas2d.height);
 
@@ -86,9 +83,24 @@
                 requestAnimationFrame(looper);
             });
         })();
+        var canvasStream = canvas2d.captureStream();
 
-        var recorder = new RecordRTC(canvas2d, {
-            type: 'canvas'
+        var audioPlusCanvasStream = new MediaStream();
+
+        canvasStream.getVideoTracks().forEach(function(track) {
+            audioPlusCanvasStream.addTrack(track);
+        });
+
+        navigator.mediaDevices.getUserMedia({
+            audio: {
+                noiseSuppression: false,
+                echoCancellation: false,
+            }}).then(function(mic) {
+            audioPlusCanvasStream.addTrack(mic.getTracks()[0]);
+        });
+
+        var recorder = new RecordRTC(audioPlusCanvasStream, {
+            type: 'video'
         });
 
         function getIndentation(line) {
@@ -149,7 +161,7 @@
 
         function disableEditorInteraction() {
             const overlay = document.createElement('div');
-            overlay.className = 'editor-overlay';
+            overlay.className = 'editor-overlay';   
             document.getElementById('typing-area').appendChild(overlay);
             editor.getScrollerElement().style.pointerEvents = 'none';
         }
